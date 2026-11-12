@@ -4,8 +4,8 @@
  * Plugin URI:
  * Description: Gateway de Pagamento da Rede (Itaú) para WooCommerce. Semelhante ao formato do Pagar.me.
  * Version:     1.1.4
- * Author:      Dev
- * Author URI:
+ * Author:      Suedes Carletti
+ * Author URI: Suedes Carletti
  * Text Domain: rede-woocommerce
  */
 

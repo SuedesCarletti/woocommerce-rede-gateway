@@ -19,6 +19,11 @@ class WC_Rede_Admin {
     }
 
     public function ajax_test_connection() {
+        check_ajax_referer( 'rede_test_connection', 'security' );
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_send_json_error( array( 'message' => 'Sem permissão.' ), 403 );
+        }
+
         // Obter credenciais do gateway
         $options = get_option( 'woocommerce_rede_credit_card_settings' );
         if ( empty( $options['pv'] ) || empty( $options['token'] ) ) {
@@ -51,10 +56,11 @@ class WC_Rede_Admin {
         $status = wp_remote_retrieve_response_code( $response );
         $body   = wp_remote_retrieve_body( $response );
 
-        if ( $status === 200 || $status === 404 || $status === 400 ) { 
-            if ( $status === 401 ) {
-                wp_send_json_error( array( 'message' => 'Autenticação Recusada (HTTP 401). Verifique se o PV e Token estão corretos e correspondem ao ambiente.' ) );
-            }
+        if ( $status === 401 ) {
+            wp_send_json_error( array( 'message' => 'Autenticação Recusada (HTTP 401). Verifique se o PV e Token estão corretos e correspondem ao ambiente.' ) );
+        }
+
+        if ( $status === 200 || $status === 404 || $status === 400 ) {
             wp_send_json_success( array( 'message' => 'Conexão estabelecida com sucesso! Código HTTP: ' . $status ) );
         } else {
             wp_send_json_error( array( 'message' => 'Erro Inesperado. Código HTTP: ' . $status . ' - ' . $body ) );

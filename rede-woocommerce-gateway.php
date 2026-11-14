@@ -1,11 +1,11 @@
 <?php
 /**
  * Plugin Name: Rede (Itaú) WooCommerce Gateway
- * Plugin URI:
- * Description: Gateway de Pagamento da Rede (Itaú) para WooCommerce. Semelhante ao formato do Pagar.me.
+ * Plugin URI: https://github.com/SuedesCarletti/woocommerce-rede-gateway
+ * Description: Gateway de Pagamento da Rede (Itaú) para WooCommerce.
  * Version:     1.1.4
- * Author:      Dev
- * Author URI:
+ * Author: Suedes Carletti
+ * License: Todos os direitos reservados / All rights reserved
  * Text Domain: rede-woocommerce
  */
 

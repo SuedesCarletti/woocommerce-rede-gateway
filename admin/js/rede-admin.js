@@ -49,7 +49,7 @@ jQuery(document).ready(function($) {
             },
             success: function(response) {
                 if(response.success) {
-                    alert('✅ SUCESSO! A API da Rede respondeu corretamente.\n\nMensagem: ' + response.data.message);
+                    alert('SUCESSO! A API da Rede respondeu corretamente.\n\nMensagem: ' + response.data.message);
                 } else {
                     alert('❌ ERRO!\n\nMensagem: ' + response.data.message);
                 }

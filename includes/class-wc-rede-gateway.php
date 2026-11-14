@@ -23,7 +23,7 @@ class WC_Rede_Gateway extends WC_Payment_Gateway {
         $this->description = $this->get_option( 'description' );
         $this->pv          = $this->get_option( 'pv' );
         $this->token       = $this->get_option( 'token' );
-        $this->testmode    = 'yes' === $this->get_option( 'testmode' );
+        $this->sandbox     = 'yes' === $this->get_option( 'sandbox' );
 
         add_action( 'woocommerce_update_options_payment_gateways_' . $this->id, array( $this, 'process_admin_options' ) );
         add_action( 'wp_enqueue_scripts', array( $this, 'payment_scripts' ) );
@@ -479,7 +479,7 @@ class WC_Rede_Gateway extends WC_Payment_Gateway {
         if ( $is_logging ) {
             $log_data = array();
             foreach ( $_POST as $key => $value ) {
-                if ( strpos( $key, 'rede_' ) === 0 && strpos( $key, 'cvv' ) === false && strpos( $key, 'number' ) === false ) {
+                if ( strpos( $key, 'rede_' ) === 0 && strpos( $key, 'cvv' ) === false && strpos( $key, 'number' ) === false && strpos( $key, 'cpf' ) === false && strpos( $key, 'expiry' ) === false ) {
                     $log_data[$key] = $value;
                 }
             }
@@ -523,7 +523,10 @@ class WC_Rede_Gateway extends WC_Payment_Gateway {
         }
 
         // 00 = Sucesso. PIX e Boleto podem ter returnCodes diferentes (ex: pendente), ajustado para tolerância básica
-        if ( isset( $response->returnCode ) && in_array( $response->returnCode, array('00', '0', '04', '200') ) ) {
+        $accepted_codes = ( 'rede-tab-cc' === $payment_method || ( 'rede-tab-pix' !== $payment_method && 'rede-tab-boleto' !== $payment_method ) )
+            ? array( '00' )
+            : array( '00', '0', '200' );
+        if ( isset( $response->returnCode ) && in_array( (string) $response->returnCode, $accepted_codes, true ) ) {
             
             if ( 'rede-tab-pix' === $payment_method ) {
                 $qr_image = '';
@@ -575,6 +578,9 @@ class WC_Rede_Gateway extends WC_Payment_Gateway {
                 wp_schedule_single_event( $expires_at + 30, 'rede_pix_cancel_unpaid_order', array( $order->get_id() ) );
 
                 $order->update_status( 'on-hold', 'Aguardando pagamento do PIX (Rede) por ' . self::PIX_EXPIRATION_MINUTES . ' minutos. TID: ' . (isset($response->tid) ? $response->tid : '') );
+            } elseif ( 'rede-tab-boleto' === $payment_method ) {
+                // Boleto só é pago depois de compensado: o pedido fica aguardando.
+                $order->update_status( 'on-hold', 'Aguardando pagamento do boleto (Rede). TID: ' . ( isset( $response->tid ) ? $response->tid : '' ) );
             } else {
                 $order->payment_complete( isset($response->tid) ? $response->tid : '' );
                 $order->add_order_note( sprintf( 'Pagamento registrado via %s na Rede. TID: %s', $payment_method, isset($response->tid) ? $response->tid : '' ) );
@@ -602,6 +608,21 @@ class WC_Rede_Gateway extends WC_Payment_Gateway {
         
         $method1 = isset( $_POST['rede_multi_method_1'] ) ? sanitize_text_field( $_POST['rede_multi_method_1'] ) : 'cc';
         $method2 = isset( $_POST['rede_multi_method_2'] ) ? sanitize_text_field( $_POST['rede_multi_method_2'] ) : 'pix';
+
+        // O valor vem do navegador: nunca confiar. As duas parcelas precisam ser
+        // positivas e somar exatamente o total do pedido (tolerância de 1 centavo).
+        $total_cents = (int) round( (float) $order->get_total() * 100 );
+        $c1 = (int) round( $val1 * 100 );
+        $c2 = (int) round( $val2 * 100 );
+        if ( $c1 <= 0 || $c2 <= 0 || abs( ( $c1 + $c2 ) - $total_cents ) > 1 ) {
+            wc_add_notice( 'Os valores dos dois pagamentos precisam somar o total do pedido.', 'error' );
+            return;
+        }
+        $allowed_methods = array( 'cc', 'pix', 'boleto' );
+        if ( ! in_array( $method1, $allowed_methods, true ) || ! in_array( $method2, $allowed_methods, true ) ) {
+            wc_add_notice( 'Método de pagamento inválido.', 'error' );
+            return;
+        }
         
         $payload1 = $this->build_payload_by_method( $method1, $val1, $order->get_id() . '-1' );
         $payload2 = $this->build_payload_by_method( $method2, $val2, $order->get_id() . '-2' );
@@ -625,9 +646,14 @@ class WC_Rede_Gateway extends WC_Payment_Gateway {
             return;
         }
 
-        // Ambas aprovadas!
-        $order->payment_complete( $res1->tid . '|' . $res2->tid );
-        $order->add_order_note( sprintf( 'Multipagamento aprovado! TID1: %s | TID2: %s', $res1->tid, $res2->tid ) );
+        // Ambas as transações foram aceitas pela Rede.
+        if ( 'cc' === $method1 && 'cc' === $method2 ) {
+            $order->payment_complete( $res1->tid . '|' . $res2->tid );
+            $order->add_order_note( sprintf( 'Multipagamento aprovado! TID1: %s | TID2: %s', $res1->tid, $res2->tid ) );
+        } else {
+            // PIX/boleto ainda dependem de pagamento do cliente.
+            $order->update_status( 'on-hold', sprintf( 'Multipagamento criado, aguardando PIX/boleto. TID1: %s | TID2: %s', $res1->tid, $res2->tid ) );
+        }
         $woocommerce->cart->empty_cart();
         
         return array( 'result' => 'success', 'redirect' => $this->get_return_url( $order ) );
@@ -698,6 +724,20 @@ class WC_Rede_Gateway extends WC_Payment_Gateway {
         );
     }
 
+    /**
+     * Remove dados sensíveis do cartão antes de gravar em log.
+     * Nunca registrar número completo nem CVV.
+     */
+    private function mask_payload( $payload ) {
+        if ( isset( $payload['cardNumber'] ) ) {
+            $payload['cardNumber'] = str_repeat( '*', max( 0, strlen( $payload['cardNumber'] ) - 4 ) ) . substr( $payload['cardNumber'], -4 );
+        }
+        if ( isset( $payload['securityCode'] ) ) {
+            $payload['securityCode'] = '***';
+        }
+        return $payload;
+    }
+
     private function send_api_request( $method, $endpoint, $payload = null ) {
         $pv = trim( $this->pv );
         $token = trim( $this->token );
@@ -714,7 +754,7 @@ class WC_Rede_Gateway extends WC_Payment_Gateway {
 
         if ( $is_logging ) {
             WC_Rede_Logger::info( "Request: {$method} {$url}" );
-            if ( $payload ) WC_Rede_Logger::debug( "Payload: " . wp_json_encode( $payload ) );
+            if ( $payload ) WC_Rede_Logger::debug( "Payload: " . wp_json_encode( $this->mask_payload( $payload ) ) );
         }
 
         $args = array(
